@@ -69,6 +69,9 @@ fn main() {
             // 安全检测
             diagnostics::run_security_scan,
             diagnostics::fix_security_issues,
+            // 网关智能修复助手
+            diagnostics::run_gateway_repair,
+            diagnostics::execute_repair_command,
             // 安装器
             installer::check_environment,
             installer::install_nodejs,
