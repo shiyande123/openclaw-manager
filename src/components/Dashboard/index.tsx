@@ -4,6 +4,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { useTranslation } from 'react-i18next';
 import { StatusCard } from './StatusCard';
 import { QuickActions } from './QuickActions';
+import { SmartRepairModal } from './SmartRepairModal';
 import { SystemInfo } from './SystemInfo';
 import { Setup } from '../Setup';
 import { api, ServiceStatus, isTauri } from '../../lib/tauri';
@@ -24,6 +25,7 @@ export function Dashboard({ envStatus, onSetupComplete }: DashboardProps) {
   const [logs, setLogs] = useState<string[]>([]);
   const [logsExpanded, setLogsExpanded] = useState(true);
   const [autoRefreshLogs, setAutoRefreshLogs] = useState(true);
+  const [smartRepairOpen, setSmartRepairOpen] = useState(false);
   const logsContainerRef = useRef<HTMLDivElement>(null);
 
   const fetchStatus = async () => {
@@ -114,6 +116,10 @@ export function Dashboard({ envStatus, onSetupComplete }: DashboardProps) {
     }
   };
 
+  const handleSmartRepair = () => {
+    setSmartRepairOpen(true);
+  };
+
   const getLogLineClass = (line: string) => {
     if (line.includes('error') || line.includes('Error') || line.includes('ERROR')) {
       return 'text-red-400';
@@ -169,8 +175,21 @@ export function Dashboard({ envStatus, onSetupComplete }: DashboardProps) {
             onStart={handleStart}
             onStop={handleStop}
             onRestart={handleRestart}
+            onSmartRepair={handleSmartRepair}
           />
         </motion.div>
+
+        {smartRepairOpen && (
+          <motion.div variants={itemVariants}>
+            <SmartRepairModal
+              onClose={() => {
+                setSmartRepairOpen(false);
+                fetchStatus();
+                fetchLogs();
+              }}
+            />
+          </motion.div>
+        )}
 
         <motion.div variants={itemVariants}>
           <div className="bg-surface-card rounded-2xl border border-edge overflow-hidden">
