@@ -92,7 +92,31 @@
     "start": "Start",
     "stop": "Stop",
     "restart": "Restart",
-    "diagnose": "Diagnose"
+    "diagnose": "Diagnose",
+    "smartAnalyze": "Smart Analyze"
+  },
+  "smartRepair": {
+    "title": "Gateway Smart Repair",
+    "subtitle": "AI diagnosis and repair suggestions",
+    "analyzing": "Analyzing gateway status...",
+    "executing": "Executing repair...",
+    "statusOk": "Analysis complete",
+    "statusWarning": "Potential issues detected",
+    "statusError": "Gateway has errors",
+    "summary": "Diagnosis Summary",
+    "analysis": "AI Analysis",
+    "suggestions": "Repair Suggestions",
+    "riskLow": "Low Risk",
+    "riskMedium": "Medium Risk",
+    "riskHigh": "High Risk",
+    "backupRequired": "Backup recommended",
+    "autoFixable": "Auto-fixable",
+    "execute": "Execute",
+    "showDetails": "Show Raw Diagnosis",
+    "hideDetails": "Hide Raw Diagnosis",
+    "refresh": "Re-analyze",
+    "success": "Success",
+    "failed": "Failed"
   },
   "systemInfo": {
     "title": "System Info",
