@@ -440,6 +440,75 @@ pub fn run_openclaw(args: &[&str]) -> Result<String, String> {
     }
 }
 
+/// 通过 stdin 传递输入执行 openclaw 命令（用于 AI 对话）
+pub fn run_openclaw_with_input(input: &str) -> Result<String, String> {
+    debug!("[Shell] 执行 openclaw 命令（stdin 输入）");
+    
+    let openclaw_path = get_openclaw_path().ok_or_else(|| {
+        warn!("[Shell] 找不到 openclaw 命令");
+        "找不到 openclaw 命令，请确保已通过 npm install -g openclaw 安装".to_string()
+    })?;
+    
+    let extended_path = get_extended_path();
+    
+    let mut child = if openclaw_path.ends_with(".cmd") {
+        let mut cmd = Command::new("cmd");
+        cmd.args(&["/c", &openclaw_path, "agent", "--local"])
+            .env("OPENCLAW_GATEWAY_TOKEN", DEFAULT_GATEWAY_TOKEN)
+            .env("PATH", &extended_path)
+            .env("TERM", "xterm");
+        
+        #[cfg(windows)]
+        cmd.creation_flags(CREATE_NO_WINDOW);
+        
+        cmd.stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("启动 openclaw 失败: {}", e))?
+    } else {
+        let mut cmd = Command::new(&openclaw_path);
+        cmd.arg("agent")
+            .arg("--local")
+            .env("OPENCLAW_GATEWAY_TOKEN", DEFAULT_GATEWAY_TOKEN)
+            .env("PATH", &extended_path)
+            .env("TERM", "xterm");
+        
+        #[cfg(windows)]
+        cmd.creation_flags(CREATE_NO_WINDOW);
+        
+        cmd.stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("启动 openclaw 失败: {}", e))?
+    };
+    
+    // 写入输入到 stdin
+    if let Some(mut stdin) = child.stdin.take() {
+        use std::io::Write;
+        if let Err(e) = writeln!(stdin, "{}", input) {
+            warn!("[Shell] 写入 stdin 失败: {}", e);
+        }
+        drop(stdin);
+    }
+    
+    // 读取输出，设置超时
+    let output = child.wait_with_output().map_err(|e| format!("等待 openclaw 完成失败: {}", e))?;
+    
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    
+    debug!("[Shell] 命令退出码: {:?}", output.status.code());
+    debug!("[Shell] stdout 长度: {}, stderr 长度: {}", stdout.len(), stderr.len());
+    
+    if output.status.success() {
+        Ok(stdout)
+    } else {
+        Err(format!("{}\n{}", stdout, stderr).trim().to_string())
+    }
+}
+
 /// 默认的 Gateway Token
 pub const DEFAULT_GATEWAY_TOKEN: &str = "openclaw-manager-local-token";
 
