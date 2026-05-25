@@ -145,6 +145,20 @@ export interface AITestResult {
   latency_ms: number | null;
 }
 
+// 智能修复结果
+export interface RepairSuggestion {
+  command: string;
+  description: string;
+  risk_level: 'low' | 'medium' | 'high';
+  backup_required: boolean;
+}
+
+export interface GatewayRepairResult {
+  status: 'ok' | 'warning' | 'error';
+  analysis: string;
+  suggestions: RepairSuggestion[];
+}
+
 // API 封装（带日志）
 export const api = {
   // 服务管理
@@ -205,4 +219,7 @@ export const api = {
   testAIConnection: () => invokeWithLog<AITestResult>('test_ai_connection'),
   testChannel: (channelType: string) =>
     invokeWithLog<unknown>('test_channel', { channelType }),
+  runGatewayRepair: () => invokeWithLog<GatewayRepairResult>('run_gateway_repair'),
+  executeRepairCommand: (commandToRun: string) =>
+    invokeWithLog<string>('execute_repair_command', { commandToRun }),
 };
