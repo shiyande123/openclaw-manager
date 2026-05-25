@@ -2,6 +2,8 @@ use crate::models::{AITestResult, ChannelTestResult, DiagnosticResult, SystemInf
 use crate::utils::{platform, shell};
 use tauri::command;
 use log::{info, warn, error, debug};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 /// 去除 ANSI 转义序列（颜色代码等）
 fn strip_ansi_codes(input: &str) -> String {
@@ -1067,4 +1069,319 @@ pub async fn fix_security_issues(issue_ids: Vec<String>) -> Result<SecurityFixRe
         failed_ids,
         manual_instructions,
     })
+}
+
+// ============ 网关智能修复助手 ============
+
+/// AI 修复分析结果
+#[derive(Debug, Serialize, Deserialize)]
+pub struct GatewayRepairResult {
+    pub success: bool,
+    pub diagnosis_summary: String,
+    pub ai_analysis: String,
+    pub suggested_fixes: Vec<RepairSuggestion>,
+    pub raw_diagnosis: String,
+    pub error: Option<String>,
+}
+
+/// 修复建议
+#[derive(Debug, Serialize, Deserialize)]
+pub struct RepairSuggestion {
+    pub id: String,
+    pub title: String,
+    pub description: String,
+    pub command: Option<String>,
+    pub risk_level: String,
+    pub auto_fixable: bool,
+}
+
+/// 从文本中提取 JSON 代码块
+fn extract_json_block(text: &str) -> Option<String> {
+    let lines: Vec<&str> = text.lines().collect();
+    for (i, line) in lines.iter().enumerate() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("```json") || trimmed.starts_with("```") {
+            let mut brace_count = 0;
+            let mut started = false;
+            let mut json_lines = Vec::new();
+
+            for line in lines.iter().skip(i + 1) {
+                let t = line.trim();
+                if !started && (t.starts_with('{') || t.starts_with('[')) {
+                    started = true;
+                }
+                if started {
+                    for ch in t.chars() {
+                        if ch == '{' || ch == '[' { brace_count += 1; }
+                        if ch == '}' || ch == ']' { brace_count -= 1; }
+                    }
+                    json_lines.push(*line);
+                    if brace_count == 0 {
+                        break;
+                    }
+                }
+            }
+
+            if !json_lines.is_empty() {
+                return Some(json_lines.join("\n").trim().to_string());
+            }
+        }
+    }
+
+    // 尝试直接查找 JSON 对象
+    for line in lines.iter() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('{') && trimmed.ends_with('}') {
+            return Some(trimmed.to_string());
+        }
+    }
+
+    None
+}
+
+/// 解析 AI 修复响应
+fn parse_ai_repair_response(response: &str) -> (String, String, Vec<RepairSuggestion>) {
+    let json_str = extract_json_from_output(response)
+        .or_else(|| extract_json_block(response));
+
+    if let Some(json) = json_str {
+        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&json) {
+            let summary = parsed.get("summary")
+                .and_then(|v| v.as_str())
+                .unwrap_or("诊断完成")
+                .to_string();
+            let analysis = parsed.get("analysis")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let suggestions: Vec<RepairSuggestion> = parsed
+                .get("suggestions")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|item| {
+                            Some(RepairSuggestion {
+                                id: item.get("id")?.as_str()?.to_string(),
+                                title: item.get("title")?.as_str()?.to_string(),
+                                description: item.get("description").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                                command: item.get("command").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                                risk_level: item.get("risk_level").and_then(|v| v.as_str()).unwrap_or("medium").to_string(),
+                                auto_fixable: item.get("auto_fixable").and_then(|v| v.as_bool()).unwrap_or(false),
+                            })
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            return (summary, analysis, suggestions);
+        }
+    }
+
+    let summary = if response.len() > 50 {
+        format!("AI 分析结果 ({} 字符)", response.len())
+    } else {
+        response.to_string()
+    };
+
+    (summary, response.to_string(), vec![])
+}
+
+/// 加载 openclaw.json 配置
+fn load_openclaw_config() -> Result<Value, String> {
+    let config_path = platform::get_config_file_path();
+    if !std::path::Path::new(&config_path).exists() {
+        return Ok(serde_json::json!({}));
+    }
+    let content = std::fs::read_to_string(&config_path)
+        .map_err(|e| format!("读取配置文件失败: {}", e))?;
+    serde_json::from_str(&content)
+        .map_err(|e| format!("解析配置文件失败: {}", e))
+}
+
+/// 运行网关智能修复分析
+#[command]
+pub async fn run_gateway_repair() -> Result<GatewayRepairResult, String> {
+    info!("[智能修复] 开始运行网关智能修复分析...");
+
+    // Step 1: 收集诊断信息
+    info!("[智能修复] Step 1: 运行系统诊断...");
+    let mut diagnosis_parts = Vec::new();
+
+    // 1.1 检查 OpenClaw 是否安装
+    let openclaw_installed = shell::get_openclaw_path().is_some();
+    diagnosis_parts.push(format!("[环境] OpenClaw: {}", if openclaw_installed { "已安装" } else { "未安装" }));
+
+    // 1.2 检查 Node.js
+    let node_check = shell::run_command_output("node", &["--version"]);
+    match &node_check {
+        Ok(v) => diagnosis_parts.push(format!("[环境] Node.js: {}", v.trim())),
+        Err(e) => diagnosis_parts.push(format!("[环境] Node.js: 未安装 ({})", e)),
+    }
+
+    // 1.3 检查配置文件
+    let config_path = platform::get_config_file_path();
+    let config_exists = std::path::Path::new(&config_path).exists();
+    diagnosis_parts.push(format!("[配置] 配置文件: {}", if config_exists { format!("存在 ({})", config_path) } else { "不存在".to_string() }));
+
+    // 1.4 检查环境变量文件
+    let env_path = platform::get_env_file_path();
+    let env_exists = std::path::Path::new(&env_path).exists();
+    diagnosis_parts.push(format!("[配置] 环境变量: {}", if env_exists { format!("存在 ({})", env_path) } else { "不存在".to_string() }));
+
+    // 1.5 运行 openclaw doctor
+    if openclaw_installed {
+        info!("[智能修复] 执行: openclaw doctor");
+        let doctor_result = shell::run_openclaw(&["doctor"]);
+        match &doctor_result {
+            Ok(output) => {
+                let clean = strip_ansi_codes(output);
+                diagnosis_parts.push(format!("[诊断] openclaw doctor 输出:\n{}", clean.trim()));
+            }
+            Err(e) => {
+                diagnosis_parts.push(format!("[诊断] openclaw doctor 执行失败: {}", e));
+            }
+        }
+    }
+
+    // 1.6 获取服务状态
+    info!("[智能修复] 检查服务状态...");
+    let service_status = shell::run_openclaw(&["status"]);
+    match &service_status {
+        Ok(output) => {
+            let clean = strip_ansi_codes(output);
+            diagnosis_parts.push(format!("[服务] openclaw status:\n{}", clean.trim()));
+        }
+        Err(e) => {
+            diagnosis_parts.push(format!("[服务] 服务状态检查失败: {}", e));
+        }
+    }
+
+    // 1.7 获取最近的错误日志
+    info!("[智能修复] 获取错误日志...");
+    let log_result = shell::run_openclaw(&["logs", "--lines", "50", "--level", "error"]);
+    match &log_result {
+        Ok(output) => {
+            let clean = strip_ansi_codes(output);
+            if !clean.trim().is_empty() {
+                diagnosis_parts.push(format!("[日志] 最近错误日志:\n{}", clean.trim()));
+            } else {
+                diagnosis_parts.push("[日志] 最近无错误日志".to_string());
+            }
+        }
+        Err(e) => {
+            diagnosis_parts.push(format!("[日志] 日志获取失败: {}", e));
+        }
+    }
+
+    let full_diagnosis = diagnosis_parts.join("\n\n");
+    info!("[智能修复] 诊断信息收集完成，长度: {} 字符", full_diagnosis.len());
+
+    // Step 2: 检查是否配置了 AI
+    info!("[智能修复] Step 2: 检查 AI 配置...");
+    let config = load_openclaw_config()?;
+    let primary_model = config
+        .pointer("/agents/defaults/model/primary")
+        .and_then(|v| v.as_str());
+
+    if primary_model.is_none() {
+        warn!("[智能修复] 未配置主模型，返回诊断结果（不调用 AI）");
+        return Ok(GatewayRepairResult {
+            success: false,
+            diagnosis_summary: "未配置 AI 模型，无法进行智能分析".to_string(),
+            ai_analysis: String::new(),
+            suggested_fixes: vec![],
+            raw_diagnosis: full_diagnosis,
+            error: Some("请先在 AI 配置 页面设置主模型".to_string()),
+        });
+    }
+
+    info!("[智能修复] 使用主模型: {}", primary_model.unwrap());
+
+    // Step 3: 调用 AI 分析
+    info!("[智能修复] Step 3: 调用 AI 分析诊断结果...");
+
+    let system_prompt = r#"你是一个专业的 OpenClaw 网关故障诊断助手。根据提供的诊断信息，分析网关可能存在的问题，并给出修复建议。
+
+请以 JSON 格式回复，格式如下：
+{
+  "summary": "简要总结诊断结果（1-2句话）",
+  "analysis": "详细分析问题原因和建议（Markdown 格式）",
+  "suggestions": [
+    {
+      "id": "fix-1",
+      "title": "修复建议标题",
+      "description": "修复说明",
+      "command": "需要的命令（可选）",
+      "risk_level": "low/medium/high",
+      "auto_fixable": true/false
+    }
+  ]
+}
+
+请确保：
+1. 只分析诊断信息中明确出现的问题，不要猜测
+2. 如果一切正常，说明"未发现问题"
+3. 每个修复建议要有具体的操作步骤或命令
+4. 评估风险等级：low=低风险可自动执行，medium=需要确认，high=可能影响服务"#;
+
+    let user_message = format!("请分析以下 OpenClaw 网关诊断信息：\n\n{}\n\n请给出问题分析和修复建议。", full_diagnosis);
+    let ai_prompt = format!("SYSTEM: {}\n\nUSER: {}", system_prompt, user_message);
+
+    info!("[智能修复] 执行: openclaw agent --local --message [AI 分析请求]");
+    
+    // 使用 openclaw agent 命令调用 AI（无界面模式）
+    let ai_result = shell::run_openclaw_with_input(&ai_prompt);
+
+    match ai_result {
+        Ok(response) => {
+            let clean_response = strip_ansi_codes(&response);
+            info!("[智能修复] AI 响应长度: {} 字符", clean_response.len());
+            let (summary, analysis, suggestions) = parse_ai_repair_response(&clean_response);
+            info!("[智能修复] ✓ AI 分析完成，发现 {} 个建议", suggestions.len());
+
+            Ok(GatewayRepairResult {
+                success: true,
+                diagnosis_summary: summary.clone(),
+                ai_analysis: analysis,
+                suggested_fixes: suggestions,
+                raw_diagnosis: full_diagnosis,
+                error: None,
+            })
+        }
+        Err(e) => {
+            error!("[智能修复] ✗ AI 调用失败: {}", e);
+            Ok(GatewayRepairResult {
+                success: false,
+                diagnosis_summary: "AI 分析失败".to_string(),
+                ai_analysis: String::new(),
+                suggested_fixes: vec![],
+                raw_diagnosis: full_diagnosis,
+                error: Some(format!("AI 调用失败: {}", e)),
+            })
+        }
+    }
+}
+
+/// 执行自动修复命令
+#[command]
+pub async fn execute_repair_command(command_to_run: String) -> Result<String, String> {
+    info!("[自动修复] 执行命令: {}", command_to_run);
+
+    let parts: Vec<&str> = command_to_run.trim().split_whitespace().collect();
+    if parts.is_empty() {
+        return Err("命令为空".to_string());
+    }
+
+    let result = shell::run_command_output(parts[0], &parts[1..]);
+
+    match result {
+        Ok(output) => {
+            let clean = strip_ansi_codes(&output);
+            info!("[自动修复] ✓ 命令执行成功");
+            Ok(clean)
+        }
+        Err(e) => {
+            error!("[自动修复] ✗ 命令执行失败: {}", e);
+            Err(format!("执行失败: {}", e))
+        }
+    }
 }
