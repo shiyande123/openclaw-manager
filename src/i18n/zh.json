@@ -92,7 +92,31 @@
     "start": "启动",
     "stop": "停止",
     "restart": "重启",
-    "diagnose": "诊断"
+    "diagnose": "诊断",
+    "smartAnalyze": "智能分析"
+  },
+  "smartRepair": {
+    "title": "网关智能修复",
+    "subtitle": "AI 诊断并提供修复建议",
+    "analyzing": "正在分析网关状态...",
+    "executing": "正在执行修复...",
+    "statusOk": "分析完成",
+    "statusWarning": "发现潜在问题",
+    "statusError": "网关存在错误",
+    "summary": "诊断摘要",
+    "analysis": "AI 分析结果",
+    "suggestions": "修复建议",
+    "riskLow": "低风险",
+    "riskMedium": "中风险",
+    "riskHigh": "高风险",
+    "backupRequired": "建议备份",
+    "autoFixable": "可自动修复",
+    "execute": "执行",
+    "showDetails": "查看原始诊断",
+    "hideDetails": "隐藏原始诊断",
+    "refresh": "重新分析",
+    "success": "执行成功",
+    "failed": "执行失败"
   },
   "systemInfo": {
     "title": "系统信息",
